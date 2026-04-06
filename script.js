@@ -213,6 +213,12 @@ async function handleSchedulerInputChange() {
 
 async function handleStart() {
   const formState = readSchedulerInputs();
+
+  if (!isStartBeforeEnd(formState.startTime, formState.endTime)) {
+    alert("Erreur : L'heure de fin doit être après l'heure de début !");
+    return;
+  }
+
   const now = Date.now();
   const schedule = buildScheduleWindow(formState.startTime, formState.endTime, now);
 
@@ -811,6 +817,19 @@ function sanitizeWarningThreshold(value, allowEmpty) {
 
 function isValidTime(value) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(value));
+}
+
+function isStartBeforeEnd(startTime, endTime) {
+  if (!isValidTime(startTime) || !isValidTime(endTime)) {
+    return false;
+  }
+
+  const toMinutes = (time) => {
+    const [hh, mm] = time.split(":").map((part) => Number(part));
+    return hh * 60 + mm;
+  };
+
+  return toMinutes(startTime) < toMinutes(endTime);
 }
 
 function buildScheduleWindow(startTime, endTime, baseMs) {
