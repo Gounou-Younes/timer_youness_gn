@@ -50,6 +50,7 @@ const dom = {
   startBtn: document.getElementById("startBtn"),
   pauseBtn: document.getElementById("pauseBtn"),
   resetBtn: document.getElementById("resetBtn"),
+  cancelBtn: document.getElementById("cancelBtn"),
   adminLeadMessage: document.getElementById("adminLeadMessage"),
   adminLiveTime: document.getElementById("adminLiveTime"),
   adminStatus: document.getElementById("adminStatus"),
@@ -115,6 +116,8 @@ function applyInitialUiState() {
   if (mode === "admin" && dom.adminStatus) {
     dom.adminStatus.textContent = "En attente...";
   }
+
+  setInputsEnabled(true);
 }
 
 function resolveRealtimeDatabase(app) {
@@ -168,13 +171,14 @@ function bindAdminActions() {
     return;
   }
 
-  if (!dom.startBtn || !dom.pauseBtn || !dom.resetBtn) {
+  if (!dom.startBtn || !dom.pauseBtn || !dom.resetBtn || !dom.cancelBtn) {
     return;
   }
 
   dom.startBtn.addEventListener("click", handleStart);
   dom.pauseBtn.addEventListener("click", handlePause);
   dom.resetBtn.addEventListener("click", handleReset);
+  dom.cancelBtn.addEventListener("click", handleCancel);
 
   dom.meetingTitleInput?.addEventListener("input", handleSchedulerInputChange);
   dom.startTimeInput?.addEventListener("change", handleSchedulerInputChange);
@@ -354,6 +358,36 @@ async function handleReset() {
     sessionId: null,
     updatedAt: Date.now(),
   });
+
+  setInputsEnabled(true);
+}
+
+async function handleCancel() {
+  const formState = readSchedulerInputs();
+
+  hideWarningOverlay(true);
+  lastWarningSessionKey = "";
+  autoTransitionInFlight = false;
+
+  await writeState({
+    ...state,
+    meetingTitle: formState.meetingTitle,
+    startTime: formState.startTime,
+    endTime: formState.endTime,
+    warningThresholdMin: formState.warningThresholdMin,
+    status: "idle",
+    isPaused: false,
+    pausedPhase: null,
+    pausedRemainingMs: null,
+    targetStartAt: null,
+    targetEndAt: null,
+    plannedDurationMs: null,
+    initialRunMs: null,
+    sessionId: null,
+    updatedAt: Date.now(),
+  });
+
+  setInputsEnabled(true);
 }
 
 function readSchedulerInputs() {
@@ -443,6 +477,8 @@ function render() {
   const timerText = live.timeUp ? "TEMPS ÉCOULÉ" : formatDuration(live.remainingMs);
 
   if (mode === "admin" && dom.adminLiveTime && dom.adminStatus) {
+    setInputsEnabled(live.status === "idle");
+
     if (dom.adminLeadMessage) {
       dom.adminLeadMessage.textContent =
         live.status === "pre_meeting"
@@ -578,6 +614,26 @@ function hideWarningOverlay(immediate) {
   }
 
   dom.tvWarningOverlay.classList.remove("is-visible");
+}
+
+function setInputsEnabled(enabled) {
+  if (mode !== "admin") {
+    return;
+  }
+
+  const shouldDisable = !enabled;
+  const inputs = [
+    dom.meetingTitleInput,
+    dom.startTimeInput,
+    dom.endTimeInput,
+    dom.warningThresholdInput,
+  ];
+
+  for (const input of inputs) {
+    if (input) {
+      input.disabled = shouldDisable;
+    }
+  }
 }
 
 function computeLiveState(sourceState) {

@@ -107,7 +107,7 @@ input[type="text"] {
 .button-grid {
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
 }
 
@@ -132,6 +132,12 @@ input[type="text"] {
 
 .btn-reset {
   background: linear-gradient(180deg, #ffb0b0, var(--danger));
+}
+
+.btn-cancel {
+  background: linear-gradient(180deg, #3b4558, #2a3344);
+  color: #e4ebff;
+  border: 1px solid #5f708e;
 }
 
 .admin-live {
