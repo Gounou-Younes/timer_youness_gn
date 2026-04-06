@@ -154,6 +154,7 @@ input[type="text"] {
 }
 
 .tv-frame {
+  position: relative;
   min-height: 74vh;
   border-radius: 28px;
   border: 2px solid #19345f;
@@ -213,6 +214,10 @@ input[type="text"] {
   text-shadow: 0 0 24px rgba(255, 187, 56, 0.45);
 }
 
+.tv-warning .tv-status {
+  color: #ffd772;
+}
+
 .tv-timeup .tv-timer {
   color: var(--tv-danger);
   text-shadow: 0 0 24px rgba(255, 82, 82, 0.35);
@@ -240,6 +245,47 @@ input[type="text"] {
 
 .tv-timeup .tv-progress {
   background: linear-gradient(90deg, #ff7c7c, #ff4343);
+}
+
+.tv-warning-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -42%) scale(0.96);
+  width: min(86vw, 1200px);
+  padding: 22px 26px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 198, 92, 0.86);
+  background: linear-gradient(
+    145deg,
+    rgba(14, 21, 34, 0.92),
+    rgba(22, 29, 44, 0.8)
+  );
+  box-shadow:
+    0 0 0 1px rgba(255, 198, 92, 0.25),
+    0 18px 50px rgba(0, 0, 0, 0.55),
+    0 0 36px rgba(255, 168, 56, 0.35);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 35;
+  transition:
+    opacity 380ms ease,
+    transform 380ms ease;
+}
+
+.tv-warning-overlay.is-visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.tv-warning-text {
+  margin: 0;
+  color: #fff3d0;
+  font-size: clamp(24px, 3.1vw, 52px);
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-shadow: 0 0 14px rgba(255, 180, 80, 0.45);
 }
 
 .tv-hint {

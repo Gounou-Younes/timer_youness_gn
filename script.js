@@ -23,12 +23,16 @@ const firebaseConfig = {
 };
 
 const defaultState = {
-  meetingTitle: "Monthly Review",
+  meetingTitle: "Revue mensuelle",
   startTime: "09:00",
   endTime: "10:00",
   warningThresholdMin: 5,
   status: "idle",
+  isPaused: false,
   pausedRemainingMs: null,
+  targetEndAt: null,
+  initialRunMs: null,
+  sessionId: null,
   updatedAt: 0,
 };
 
@@ -51,12 +55,16 @@ const dom = {
   tvTimer: document.getElementById("tvTimer"),
   tvProgress: document.getElementById("tvProgress"),
   tvHint: document.getElementById("tvHint"),
+  tvWarningOverlay: document.getElementById("tvWarningOverlay"),
+  tvWarningText: document.getElementById("tvWarningText"),
 };
 
 let state = { ...defaultState };
 let timerRef = null;
 let tvScale = 1;
 let isSavingForm = false;
+let warningOverlayTimeoutId = null;
+let lastWarningSessionKey = "";
 
 init();
 
@@ -82,11 +90,11 @@ async function init() {
     const database = resolveRealtimeDatabase(app);
     timerRef = ref(database, timerPath);
     subscribeToTimerState();
-  } catch (error) {
+  } catch {
     timerRef = null;
     if (mode === "admin" && dom.adminStatus) {
       dom.adminStatus.textContent =
-        "Realtime DB unavailable. Running local mode until connection is fixed.";
+        "Base temps réel indisponible. Mode local activé.";
     }
   }
 
@@ -100,7 +108,7 @@ async function init() {
 
 function applyInitialUiState() {
   if (mode === "admin" && dom.adminStatus) {
-    dom.adminStatus.textContent = "Ready";
+    dom.adminStatus.textContent = "En attente...";
   }
 }
 
@@ -118,9 +126,13 @@ function resolveRealtimeDatabase(app) {
 }
 
 function setupMode() {
-  dom.modeLabel.textContent = mode === "tv" ? "TV Mode" : "Admin Mode";
-  dom.adminView.classList.toggle("hidden", mode !== "admin");
-  dom.tvView.classList.toggle("hidden", mode !== "tv");
+  if (dom.modeLabel) {
+    dom.modeLabel.textContent =
+      mode === "tv" ? "Mode TV" : "Mode administrateur";
+  }
+
+  dom.adminView?.classList.toggle("hidden", mode !== "admin");
+  dom.tvView?.classList.toggle("hidden", mode !== "tv");
 }
 
 function subscribeToTimerState() {
@@ -159,10 +171,10 @@ function bindAdminActions() {
   dom.pauseBtn.addEventListener("click", handlePause);
   dom.resetBtn.addEventListener("click", handleReset);
 
-  dom.meetingTitleInput.addEventListener("input", handleSchedulerInputChange);
-  dom.startTimeInput.addEventListener("change", handleSchedulerInputChange);
-  dom.endTimeInput.addEventListener("change", handleSchedulerInputChange);
-  dom.warningThresholdInput.addEventListener(
+  dom.meetingTitleInput?.addEventListener("input", handleSchedulerInputChange);
+  dom.startTimeInput?.addEventListener("change", handleSchedulerInputChange);
+  dom.endTimeInput?.addEventListener("change", handleSchedulerInputChange);
+  dom.warningThresholdInput?.addEventListener(
     "change",
     handleSchedulerInputChange,
   );
@@ -174,22 +186,64 @@ async function handleSchedulerInputChange() {
   }
 
   const formState = readSchedulerInputs();
-  await writeState({
+
+  const nextState = {
     ...state,
-    ...formState,
+    meetingTitle: formState.meetingTitle,
+    warningThresholdMin: formState.warningThresholdMin,
     updatedAt: Date.now(),
-  });
+  };
+
+  if (state.status === "idle") {
+    nextState.startTime = formState.startTime;
+    nextState.endTime = formState.endTime;
+  }
+
+  await writeState(nextState);
 }
 
 async function handleStart() {
   const formState = readSchedulerInputs();
+  const now = Date.now();
+  const schedule = buildScheduleWindow(formState.startTime, formState.endTime, now);
+
+  const resuming = state.status === "paused" || state.isPaused;
+  let targetEndAt;
+  let initialRunMs;
+  let sessionId;
+
+  if (resuming && Number.isFinite(state.pausedRemainingMs)) {
+    const pausedRemaining = Math.max(0, Number(state.pausedRemainingMs));
+    targetEndAt = now + pausedRemaining;
+    initialRunMs =
+      Number.isFinite(state.initialRunMs) && state.initialRunMs > 0
+        ? state.initialRunMs
+        : Math.max(pausedRemaining, 60000);
+    sessionId = state.sessionId || String(now);
+  } else {
+    const scheduleRemaining = schedule.hasValidSchedule
+      ? Math.max(0, schedule.endMs - now)
+      : 0;
+
+    targetEndAt = schedule.hasValidSchedule ? schedule.endMs : now + 60000;
+    initialRunMs = Math.max(
+      60000,
+      scheduleRemaining || schedule.durationMs || 60000,
+    );
+    sessionId = String(now);
+    lastWarningSessionKey = "";
+  }
 
   await writeState({
     ...state,
     ...formState,
     status: "running",
+    isPaused: false,
     pausedRemainingMs: null,
-    updatedAt: Date.now(),
+    targetEndAt,
+    initialRunMs,
+    sessionId,
+    updatedAt: now,
   });
 }
 
@@ -199,32 +253,78 @@ async function handlePause() {
   }
 
   const live = computeLiveState(state);
+  const formState = readSchedulerInputs();
 
   await writeState({
     ...state,
-    ...readSchedulerInputs(),
+    meetingTitle: formState.meetingTitle,
+    warningThresholdMin: formState.warningThresholdMin,
     status: "paused",
+    isPaused: true,
     pausedRemainingMs: live.remainingMs,
+    targetEndAt: null,
     updatedAt: Date.now(),
   });
 }
 
 async function handleReset() {
+  if (mode === "admin") {
+    if (dom.meetingTitleInput) {
+      dom.meetingTitleInput.value = "";
+    }
+    if (dom.startTimeInput) {
+      dom.startTimeInput.value = "";
+    }
+    if (dom.endTimeInput) {
+      dom.endTimeInput.value = "";
+    }
+    if (dom.warningThresholdInput) {
+      dom.warningThresholdInput.value = "";
+    }
+  }
+
+  hideWarningOverlay(true);
+  lastWarningSessionKey = "";
+
   await writeState({
-    ...state,
-    ...readSchedulerInputs(),
+    meetingTitle: "",
+    startTime: "",
+    endTime: "",
+    warningThresholdMin: null,
     status: "idle",
+    isPaused: false,
     pausedRemainingMs: null,
+    targetEndAt: null,
+    initialRunMs: null,
+    sessionId: null,
     updatedAt: Date.now(),
   });
 }
 
 function readSchedulerInputs() {
   return {
-    meetingTitle: sanitizeMeetingTitle(readInputValue(dom.meetingTitleInput, defaultState.meetingTitle)),
-    startTime: sanitizeTime(readInputValue(dom.startTimeInput, defaultState.startTime), defaultState.startTime),
-    endTime: sanitizeTime(readInputValue(dom.endTimeInput, defaultState.endTime), defaultState.endTime),
-    warningThresholdMin: clampWarningMinutes(Number(readInputValue(dom.warningThresholdInput, String(defaultState.warningThresholdMin)))),
+    meetingTitle: sanitizeMeetingTitle(
+      readInputValue(dom.meetingTitleInput, defaultState.meetingTitle),
+      defaultState.meetingTitle,
+      false,
+    ),
+    startTime: sanitizeTime(
+      readInputValue(dom.startTimeInput, defaultState.startTime),
+      defaultState.startTime,
+      false,
+    ),
+    endTime: sanitizeTime(
+      readInputValue(dom.endTimeInput, defaultState.endTime),
+      defaultState.endTime,
+      false,
+    ),
+    warningThresholdMin: sanitizeWarningThreshold(
+      readInputValue(
+        dom.warningThresholdInput,
+        String(defaultState.warningThresholdMin),
+      ),
+      false,
+    ),
   };
 }
 
@@ -234,11 +334,12 @@ function readInputValue(input, fallback) {
   }
 
   const value = input.value.trim();
-  return value || fallback;
+  return value === "" ? fallback : value;
 }
 
 function syncInputsFromState(currentState) {
   isSavingForm = true;
+
   if (dom.meetingTitleInput) {
     dom.meetingTitleInput.value = currentState.meetingTitle;
   }
@@ -249,8 +350,12 @@ function syncInputsFromState(currentState) {
     dom.endTimeInput.value = currentState.endTime;
   }
   if (dom.warningThresholdInput) {
-    dom.warningThresholdInput.value = String(currentState.warningThresholdMin);
+    dom.warningThresholdInput.value =
+      currentState.warningThresholdMin == null
+        ? ""
+        : String(currentState.warningThresholdMin);
   }
+
   isSavingForm = false;
 }
 
@@ -278,10 +383,11 @@ function startRenderLoop() {
 
 function render() {
   const live = computeLiveState(state);
-  const remainingText = live.timeUp ? "TIME'S UP" : formatDuration(live.remainingMs);
+  const timerText = live.timeUp ? "TEMPS ÉCOULÉ" : formatDuration(live.remainingMs);
 
   if (mode === "admin" && dom.adminLiveTime && dom.adminStatus) {
-    dom.adminLiveTime.textContent = live.timeUp ? "00:00" : formatDuration(live.remainingMs);
+    dom.adminLiveTime.textContent =
+      live.timeUp || live.status === "idle" ? "00:00" : formatDuration(live.remainingMs);
     dom.adminStatus.textContent = live.statusLabel;
   }
 
@@ -293,68 +399,157 @@ function render() {
     dom.tvTimer &&
     dom.tvProgress
   ) {
-    dom.tvMeetingTitle.textContent = live.meetingTitle;
-    dom.tvScheduleMeta.textContent = `Start ${formatClockLabel(live.startTime)} - End ${formatClockLabel(live.endTime)}`;
+    dom.tvMeetingTitle.textContent = live.meetingTitleDisplay;
+    dom.tvScheduleMeta.textContent = `Début ${live.startLabel} - Fin ${live.endLabel}`;
     dom.tvStatus.textContent = live.statusLabel;
-    dom.tvTimer.textContent = remainingText;
+    dom.tvTimer.textContent = timerText;
     dom.tvProgress.style.width = `${live.progressPercent.toFixed(1)}%`;
-    document.querySelector(".tv-progress-wrap")?.setAttribute("aria-valuenow", String(Math.round(live.progressPercent)));
+    document
+      .querySelector(".tv-progress-wrap")
+      ?.setAttribute("aria-valuenow", String(Math.round(live.progressPercent)));
 
     document.body.classList.toggle("tv-warning", live.isWarning);
     document.body.classList.toggle("tv-timeup", live.timeUp);
+
+    maybeShowWarningOverlay(live);
   }
+}
+
+function maybeShowWarningOverlay(live) {
+  if (mode !== "tv" || !dom.tvWarningOverlay || !dom.tvWarningText) {
+    return;
+  }
+
+  if (live.isWarning && live.sessionId) {
+    const key = `${live.sessionId}|${live.warningThresholdMin}`;
+    if (lastWarningSessionKey !== key) {
+      lastWarningSessionKey = key;
+      showWarningOverlay(live.warningThresholdMin);
+    }
+    return;
+  }
+
+  if (live.status !== "running") {
+    lastWarningSessionKey = "";
+    hideWarningOverlay(true);
+  }
+}
+
+function showWarningOverlay(minutes) {
+  if (!dom.tvWarningOverlay || !dom.tvWarningText) {
+    return;
+  }
+
+  if (warningOverlayTimeoutId) {
+    clearTimeout(warningOverlayTimeoutId);
+    warningOverlayTimeoutId = null;
+  }
+
+  dom.tvWarningText.textContent =
+    `⚠️ Attention : Il ne reste que ${minutes} minutes pour conclure la réunion !`;
+  dom.tvWarningOverlay.classList.add("is-visible");
+
+  warningOverlayTimeoutId = window.setTimeout(() => {
+    hideWarningOverlay(false);
+  }, 10000);
+}
+
+function hideWarningOverlay(immediate) {
+  if (!dom.tvWarningOverlay) {
+    return;
+  }
+
+  if (immediate && warningOverlayTimeoutId) {
+    clearTimeout(warningOverlayTimeoutId);
+    warningOverlayTimeoutId = null;
+  }
+
+  dom.tvWarningOverlay.classList.remove("is-visible");
 }
 
 function computeLiveState(sourceState) {
   const safe = sanitizeState(sourceState);
   const now = Date.now();
-  const schedule = buildScheduleWindow(safe.startTime, safe.endTime, now);
 
-  let remainingMs;
-  let statusLabel;
+  const startForCalc = safe.startTime || defaultState.startTime;
+  const endForCalc = safe.endTime || defaultState.endTime;
+  const schedule = buildScheduleWindow(startForCalc, endForCalc, now);
+
+  let remainingMs = 0;
+  let statusLabel = "En attente...";
   let timeUp = false;
 
-  if (safe.status === "paused") {
-    remainingMs = Math.max(0, Number(safe.pausedRemainingMs ?? schedule.endMs - now));
-    statusLabel = "Paused";
+  if (safe.status === "paused" || safe.isPaused) {
+    remainingMs = Math.max(
+      0,
+      Number(
+        safe.pausedRemainingMs ??
+          deriveRunningRemaining(safe, schedule, now),
+      ),
+    );
+    statusLabel = "EN PAUSE";
   } else if (safe.status === "running") {
-    remainingMs = Math.max(0, schedule.endMs - now);
+    remainingMs = Math.max(0, deriveRunningRemaining(safe, schedule, now));
 
-    if (remainingMs === 0) {
+    if (remainingMs <= 0) {
+      remainingMs = 0;
       timeUp = true;
-      statusLabel = "Time's Up";
-    } else if (now < schedule.startMs) {
-      statusLabel = "Scheduled";
+      statusLabel = "TEMPS ÉCOULÉ";
     } else {
-      statusLabel = "In Progress";
+      statusLabel = "EN COURS";
     }
-  } else {
-    remainingMs = Math.max(0, schedule.endMs - now);
-    statusLabel = now < schedule.startMs ? "Ready" : "Idle";
   }
 
-  const warningMs = safe.warningThresholdMin * 60000;
-  const isWarning =
-    !timeUp &&
-    safe.status === "running" &&
-    remainingMs > 0 &&
-    remainingMs <= warningMs;
+  const warningThresholdMin =
+    safe.warningThresholdMin == null
+      ? defaultState.warningThresholdMin
+      : safe.warningThresholdMin;
 
-  const elapsed = Math.max(
-    0,
-    Math.min(schedule.durationMs, schedule.durationMs - Math.min(remainingMs, schedule.durationMs)),
-  );
-  const progressPercent = schedule.durationMs > 0 ? (elapsed / schedule.durationMs) * 100 : 0;
+  const remainingMinutes = Math.ceil(remainingMs / 60000);
+  const isWarning =
+    safe.status === "running" &&
+    !safe.isPaused &&
+    !timeUp &&
+    remainingMinutes <= warningThresholdMin;
+
+  const baselineMs =
+    Number.isFinite(safe.initialRunMs) && safe.initialRunMs > 0
+      ? safe.initialRunMs
+      : schedule.hasValidSchedule
+        ? Math.max(60000, schedule.durationMs)
+        : Math.max(60000, remainingMs || 60000);
+
+  const progressPercent =
+    safe.status === "idle"
+      ? 0
+      : clampPercent(((baselineMs - remainingMs) / baselineMs) * 100);
 
   return {
     ...safe,
     ...schedule,
     remainingMs,
+    remainingMinutes,
     statusLabel,
-    isWarning,
     timeUp,
+    isWarning,
     progressPercent,
+    warningThresholdMin,
+    meetingTitleDisplay: safe.meetingTitle || "Aucune réunion",
+    startLabel: safe.startTime || "--:--",
+    endLabel: safe.endTime || "--:--",
   };
+}
+
+function deriveRunningRemaining(safe, schedule, now) {
+  if (Number.isFinite(safe.targetEndAt)) {
+    return safe.targetEndAt - now;
+  }
+
+  if (schedule.hasValidSchedule) {
+    return schedule.endMs - now;
+  }
+
+  return 0;
 }
 
 function sanitizeState(raw) {
@@ -363,34 +558,82 @@ function sanitizeState(raw) {
     : "idle";
 
   return {
-    meetingTitle: sanitizeMeetingTitle(raw?.meetingTitle),
-    startTime: sanitizeTime(raw?.startTime, defaultState.startTime),
-    endTime: sanitizeTime(raw?.endTime, defaultState.endTime),
-    warningThresholdMin: clampWarningMinutes(Number(raw?.warningThresholdMin ?? defaultState.warningThresholdMin)),
+    meetingTitle: sanitizeMeetingTitle(
+      raw?.meetingTitle,
+      defaultState.meetingTitle,
+      true,
+    ),
+    startTime: sanitizeTime(raw?.startTime, defaultState.startTime, true),
+    endTime: sanitizeTime(raw?.endTime, defaultState.endTime, true),
+    warningThresholdMin: sanitizeWarningThreshold(raw?.warningThresholdMin, true),
     status,
+    isPaused: Boolean(raw?.isPaused ?? status === "paused"),
     pausedRemainingMs:
       raw?.pausedRemainingMs == null
         ? null
         : Math.max(0, Number(raw.pausedRemainingMs)),
+    targetEndAt:
+      raw?.targetEndAt == null || !Number.isFinite(Number(raw.targetEndAt))
+        ? null
+        : Number(raw.targetEndAt),
+    initialRunMs:
+      raw?.initialRunMs == null || !Number.isFinite(Number(raw.initialRunMs))
+        ? null
+        : Math.max(0, Number(raw.initialRunMs)),
+    sessionId: raw?.sessionId ? String(raw.sessionId) : null,
     updatedAt: Number(raw?.updatedAt ?? Date.now()),
   };
 }
 
-function sanitizeMeetingTitle(value) {
+function sanitizeMeetingTitle(value, fallback, allowEmpty) {
   const title = String(value ?? "").trim();
-  return title || defaultState.meetingTitle;
+  if (!title) {
+    return allowEmpty ? "" : fallback;
+  }
+  return title.slice(0, 100);
 }
 
-function sanitizeTime(value, fallback) {
+function sanitizeTime(value, fallback, allowEmpty) {
   const raw = String(value ?? "").trim();
-  const match = raw.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-  if (!match) {
-    return fallback;
+
+  if (raw === "") {
+    return allowEmpty ? "" : fallback;
   }
-  return `${match[1]}:${match[2]}`;
+
+  return isValidTime(raw) ? raw : fallback;
+}
+
+function sanitizeWarningThreshold(value, allowEmpty) {
+  if (value == null || String(value).trim() === "") {
+    return allowEmpty ? null : defaultState.warningThresholdMin;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return allowEmpty ? null : defaultState.warningThresholdMin;
+  }
+
+  return clampWarningMinutes(parsed);
+}
+
+function isValidTime(value) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(value));
 }
 
 function buildScheduleWindow(startTime, endTime, baseMs) {
+  if (!isValidTime(startTime) || !isValidTime(endTime)) {
+    return {
+      hasValidSchedule: false,
+      startTime,
+      endTime,
+      startDate: null,
+      endDate: null,
+      startMs: null,
+      endMs: null,
+      durationMs: 0,
+    };
+  }
+
   const startDate = parseTimeToTodayDate(startTime, baseMs);
   const endDate = parseTimeToTodayDate(endTime, baseMs);
 
@@ -402,6 +645,7 @@ function buildScheduleWindow(startTime, endTime, baseMs) {
   const endMs = endDate.getTime();
 
   return {
+    hasValidSchedule: true,
     startTime,
     endTime,
     startDate,
@@ -413,8 +657,7 @@ function buildScheduleWindow(startTime, endTime, baseMs) {
 }
 
 function parseTimeToTodayDate(hhmm, baseMs) {
-  const safeTime = sanitizeTime(hhmm, defaultState.startTime);
-  const [hh, mm] = safeTime.split(":").map((part) => Number(part));
+  const [hh, mm] = hhmm.split(":").map((part) => Number(part));
   const baseDate = new Date(baseMs);
   const next = new Date(baseDate);
   next.setHours(hh, mm, 0, 0);
@@ -434,15 +677,20 @@ function formatDuration(ms) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatClockLabel(hhmm) {
-  return sanitizeTime(hhmm, "00:00");
-}
-
 function clampWarningMinutes(value) {
   if (!Number.isFinite(value)) {
     return defaultState.warningThresholdMin;
   }
+
   return Math.min(120, Math.max(1, Math.round(value)));
+}
+
+function clampPercent(value) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, value));
 }
 
 function setupRemoteControlSupport() {
@@ -482,7 +730,12 @@ function setupRemoteControlSupport() {
 
 function adjustWarningThreshold(delta) {
   const current = clampWarningMinutes(
-    Number(readInputValue(dom.warningThresholdInput, String(defaultState.warningThresholdMin))),
+    Number(
+      readInputValue(
+        dom.warningThresholdInput,
+        String(defaultState.warningThresholdMin),
+      ),
+    ),
   );
   const next = clampWarningMinutes(current + delta);
   if (dom.warningThresholdInput) {
@@ -502,16 +755,16 @@ async function toggleFullscreen() {
 function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {
-      // Ignore SW registration errors in unsupported environments.
+      // Ignorer les erreurs de service worker selon l'environnement.
     });
   }
 }
 
 function renderCredentialWarning() {
-  const warning = "Firebase credentials missing: paste config in script.js";
-  if (mode === "admin") {
+  const warning = "Configuration Firebase manquante : renseignez script.js";
+  if (mode === "admin" && dom.adminStatus) {
     dom.adminStatus.textContent = warning;
-  } else {
+  } else if (dom.tvHint) {
     dom.tvHint.textContent = warning;
   }
 }
@@ -526,7 +779,7 @@ async function requestWakeLock() {
   try {
     wakeLock = await navigator.wakeLock.request("screen");
   } catch {
-    // Wake lock may be blocked by browser policy.
+    // Le wake lock peut être bloqué par le navigateur.
   }
 }
 

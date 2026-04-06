@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -17,32 +17,32 @@
 
       <section id="adminView" class="view hidden" aria-live="polite">
         <div class="card">
-          <h2>Admin Dashboard</h2>
+          <h2>Tableau de Bord</h2>
           <p class="muted">
-            Use this mode on mobile phone or laptop: ?mode=admin
+            Utilisez ce mode sur mobile ou ordinateur portable : ?mode=admin
           </p>
 
-          <label for="meetingTitleInput">Meeting Title</label>
+          <label for="meetingTitleInput">Titre de la Réunion</label>
           <input
             id="meetingTitleInput"
             type="text"
-            value="Monthly Review"
+            value="Revue mensuelle"
             maxlength="100"
           />
 
           <div class="schedule-grid">
             <div>
-              <label for="startTimeInput">Start Time</label>
+              <label for="startTimeInput">Heure de Début</label>
               <input id="startTimeInput" type="time" value="09:00" />
             </div>
             <div>
-              <label for="endTimeInput">End Time</label>
+              <label for="endTimeInput">Heure de Fin</label>
               <input id="endTimeInput" type="time" value="10:00" />
             </div>
           </div>
 
           <label for="warningThresholdInput"
-            >Warning Threshold (minutes before end)</label
+            >Seuil d'Alerte (minutes avant la fin)</label
           >
           <input
             id="warningThresholdInput"
@@ -54,31 +54,41 @@
 
           <div class="button-grid">
             <button id="startBtn" class="btn btn-start" type="button">
-              Start
+              Démarrer
             </button>
             <button id="pauseBtn" class="btn btn-pause" type="button">
               Pause
             </button>
             <button id="resetBtn" class="btn btn-reset" type="button">
-              Reset
+              Réinitialiser
             </button>
           </div>
 
           <p id="adminLiveTime" class="admin-live">00:00</p>
-          <p id="adminStatus" class="status">Loading state...</p>
+          <p id="adminStatus" class="status">En attente...</p>
           <p class="muted small">
-            Remote keys: ArrowUp/ArrowDown adjust warning threshold, Enter
-            toggles Start/Pause
+            Touches télécommande : ArrowUp/ArrowDown ajustent le seuil d'alerte,
+            Enter bascule Démarrer/Pause
           </p>
         </div>
       </section>
 
       <section id="tvView" class="view hidden" aria-live="polite">
         <div class="tv-frame">
-          <p id="tvMeetingTitle" class="tv-title">Monthly Review</p>
-          <p id="tvScheduleMeta" class="tv-meta">Start 09:00 • End 10:00</p>
-          <p id="tvStatus" class="tv-status">Waiting</p>
+          <p id="tvMeetingTitle" class="tv-title">Revue mensuelle</p>
+          <p id="tvScheduleMeta" class="tv-meta">Début 09:00 - Fin 10:00</p>
+          <p id="tvStatus" class="tv-status">En attente...</p>
           <p id="tvTimer" class="tv-timer">00:00</p>
+          <div
+            id="tvWarningOverlay"
+            class="tv-warning-overlay"
+            aria-live="assertive"
+          >
+            <p id="tvWarningText" class="tv-warning-text">
+              ⚠️ Attention : Il ne reste que 5 minutes pour conclure la réunion
+              !
+            </p>
+          </div>
           <div
             class="tv-progress-wrap"
             role="progressbar"
@@ -88,7 +98,9 @@
           >
             <div id="tvProgress" class="tv-progress"></div>
           </div>
-          <p id="tvHint" class="tv-hint">Open this URL on TV with ?mode=tv</p>
+          <p id="tvHint" class="tv-hint">
+            Ouvrez cette URL sur la TV avec ?mode=tv
+          </p>
         </div>
       </section>
     </main>
