@@ -1,0 +1,38 @@
+{
+  "name": "ultimate-meeting-timer-overlay",
+  "version": "1.0.0",
+  "description": "Portable Electron meeting timer with admin and click-through overlay windows.",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.local.meetingtimer.overlay",
+    "productName": "Meeting Timer Overlay",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.1.1",
+    "electron-builder": "^26.8.1"
+  }
+}

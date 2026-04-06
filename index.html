@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>timer_youness_gn</title>
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <h1>timer_youness_gn</h1>
+        <p id="modeLabel" class="mode-label"></p>
+      </header>
+
+      <section id="adminView" class="view hidden" aria-live="polite">
+        <div class="card">
+          <h2>Admin Dashboard</h2>
+          <p class="muted">Use this mode on mobile phone or laptop: ?mode=admin</p>
+
+          <label for="durationInput">Duration (minutes)</label>
+          <input id="durationInput" type="number" min="1" max="600" value="30" />
+
+          <div class="button-grid">
+            <button id="startBtn" class="btn btn-start" type="button">Start</button>
+            <button id="pauseBtn" class="btn btn-pause" type="button">Pause</button>
+            <button id="resetBtn" class="btn btn-reset" type="button">Reset</button>
+          </div>
+
+          <p id="adminLiveTime" class="admin-live">00:30</p>
+          <p id="adminStatus" class="status">Loading state...</p>
+          <p class="muted small">Remote keys: ArrowUp/ArrowDown adjust duration, Enter toggles Start/Pause</p>
+        </div>
+      </section>
+
+      <section id="tvView" class="view hidden" aria-live="polite">
+        <div class="tv-frame">
+          <p id="tvStatus" class="tv-status">Waiting</p>
+          <p id="tvTimer" class="tv-timer">00:30</p>
+          <div class="tv-progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="tvProgress" class="tv-progress"></div>
+          </div>
+          <p id="tvHint" class="tv-hint">Open this URL on TV with ?mode=tv</p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./script.js"></script>
+  </body>
+</html>

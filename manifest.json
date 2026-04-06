@@ -1,0 +1,20 @@
+{
+  "name": "timer_youness_gn",
+  "short_name": "timer_youness",
+  "description": "Real-time meeting countdown synchronized with Firebase Realtime Database",
+  "start_url": "./?mode=tv",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1222",
+  "theme_color": "#0f172a",
+  "orientation": "landscape",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
