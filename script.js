@@ -29,8 +29,11 @@ const defaultState = {
   warningThresholdMin: 5,
   status: "idle",
   isPaused: false,
+  pausedPhase: null,
   pausedRemainingMs: null,
+  targetStartAt: null,
   targetEndAt: null,
+  plannedDurationMs: null,
   initialRunMs: null,
   sessionId: null,
   updatedAt: 0,
@@ -47,6 +50,7 @@ const dom = {
   startBtn: document.getElementById("startBtn"),
   pauseBtn: document.getElementById("pauseBtn"),
   resetBtn: document.getElementById("resetBtn"),
+  adminLeadMessage: document.getElementById("adminLeadMessage"),
   adminLiveTime: document.getElementById("adminLiveTime"),
   adminStatus: document.getElementById("adminStatus"),
   tvMeetingTitle: document.getElementById("tvMeetingTitle"),
@@ -65,6 +69,7 @@ let tvScale = 1;
 let isSavingForm = false;
 let warningOverlayTimeoutId = null;
 let lastWarningSessionKey = "";
+let autoTransitionInFlight = false;
 
 init();
 
@@ -208,28 +213,65 @@ async function handleStart() {
   const schedule = buildScheduleWindow(formState.startTime, formState.endTime, now);
 
   const resuming = state.status === "paused" || state.isPaused;
+  let status;
+  let pausedPhase = null;
+  let targetStartAt = null;
   let targetEndAt;
+  let plannedDurationMs;
   let initialRunMs;
   let sessionId;
 
   if (resuming && Number.isFinite(state.pausedRemainingMs)) {
     const pausedRemaining = Math.max(0, Number(state.pausedRemainingMs));
-    targetEndAt = now + pausedRemaining;
-    initialRunMs =
-      Number.isFinite(state.initialRunMs) && state.initialRunMs > 0
-        ? state.initialRunMs
-        : Math.max(pausedRemaining, 60000);
+    const resumePhase = state.pausedPhase === "pre_meeting" ? "pre_meeting" : "running";
+
+    if (resumePhase === "pre_meeting") {
+      status = "pre_meeting";
+      pausedPhase = null;
+      targetStartAt = now + pausedRemaining;
+      plannedDurationMs =
+        Number.isFinite(state.plannedDurationMs) && state.plannedDurationMs > 0
+          ? state.plannedDurationMs
+          : schedule.hasValidSchedule
+            ? schedule.durationMs
+            : 60 * 60 * 1000;
+      targetEndAt = targetStartAt + plannedDurationMs;
+      initialRunMs =
+        Number.isFinite(state.initialRunMs) && state.initialRunMs > 0
+          ? state.initialRunMs
+          : Math.max(plannedDurationMs, 60000);
+    } else {
+      status = "running";
+      pausedPhase = null;
+      targetEndAt = now + pausedRemaining;
+      plannedDurationMs =
+        Number.isFinite(state.plannedDurationMs) && state.plannedDurationMs > 0
+          ? state.plannedDurationMs
+          : Math.max(pausedRemaining, 60000);
+      initialRunMs =
+        Number.isFinite(state.initialRunMs) && state.initialRunMs > 0
+          ? state.initialRunMs
+          : Math.max(plannedDurationMs, 60000);
+    }
+
     sessionId = state.sessionId || String(now);
   } else {
-    const scheduleRemaining = schedule.hasValidSchedule
-      ? Math.max(0, schedule.endMs - now)
-      : 0;
+    plannedDurationMs = schedule.hasValidSchedule
+      ? Math.max(schedule.durationMs, 60000)
+      : 60 * 60 * 1000;
 
-    targetEndAt = schedule.hasValidSchedule ? schedule.endMs : now + 60000;
-    initialRunMs = Math.max(
-      60000,
-      scheduleRemaining || schedule.durationMs || 60000,
-    );
+    if (schedule.hasValidSchedule && now < schedule.startMs) {
+      status = "pre_meeting";
+      targetStartAt = schedule.startMs;
+      targetEndAt = schedule.startMs + plannedDurationMs;
+      initialRunMs = plannedDurationMs;
+    } else {
+      status = "running";
+      targetStartAt = null;
+      targetEndAt = schedule.hasValidSchedule ? schedule.endMs : now + plannedDurationMs;
+      initialRunMs = plannedDurationMs;
+    }
+
     sessionId = String(now);
     lastWarningSessionKey = "";
   }
@@ -237,10 +279,13 @@ async function handleStart() {
   await writeState({
     ...state,
     ...formState,
-    status: "running",
+    status,
     isPaused: false,
+    pausedPhase,
     pausedRemainingMs: null,
+    targetStartAt,
     targetEndAt,
+    plannedDurationMs,
     initialRunMs,
     sessionId,
     updatedAt: now,
@@ -248,12 +293,18 @@ async function handleStart() {
 }
 
 async function handlePause() {
-  if (state.status !== "running") {
+  if (state.status !== "running" && state.status !== "pre_meeting") {
     return;
   }
 
   const live = computeLiveState(state);
   const formState = readSchedulerInputs();
+
+  const pausedPhase = state.status === "pre_meeting" ? "pre_meeting" : "running";
+  const pausedRemainingMs =
+    pausedPhase === "pre_meeting"
+      ? live.remainingToStartMs
+      : live.remainingMs;
 
   await writeState({
     ...state,
@@ -261,7 +312,8 @@ async function handlePause() {
     warningThresholdMin: formState.warningThresholdMin,
     status: "paused",
     isPaused: true,
-    pausedRemainingMs: live.remainingMs,
+    pausedPhase,
+    pausedRemainingMs,
     targetEndAt: null,
     updatedAt: Date.now(),
   });
@@ -293,8 +345,11 @@ async function handleReset() {
     warningThresholdMin: null,
     status: "idle",
     isPaused: false,
+    pausedPhase: null,
     pausedRemainingMs: null,
+    targetStartAt: null,
     targetEndAt: null,
+    plannedDurationMs: null,
     initialRunMs: null,
     sessionId: null,
     updatedAt: Date.now(),
@@ -382,10 +437,19 @@ function startRenderLoop() {
 }
 
 function render() {
+  maybeAutoTransitionFromPreMeeting();
+
   const live = computeLiveState(state);
   const timerText = live.timeUp ? "TEMPS ÉCOULÉ" : formatDuration(live.remainingMs);
 
   if (mode === "admin" && dom.adminLiveTime && dom.adminStatus) {
+    if (dom.adminLeadMessage) {
+      dom.adminLeadMessage.textContent =
+        live.status === "pre_meeting"
+          ? "La réunion commence dans :"
+          : "Temps restant :";
+    }
+
     dom.adminLiveTime.textContent =
       live.timeUp || live.status === "idle" ? "00:00" : formatDuration(live.remainingMs);
     dom.adminStatus.textContent = live.statusLabel;
@@ -401,7 +465,10 @@ function render() {
   ) {
     dom.tvMeetingTitle.textContent = live.meetingTitleDisplay;
     dom.tvScheduleMeta.textContent = `Début ${live.startLabel} - Fin ${live.endLabel}`;
-    dom.tvStatus.textContent = live.statusLabel;
+    dom.tvStatus.textContent =
+      live.status === "pre_meeting"
+        ? "La réunion commence dans :"
+        : live.statusLabel;
     dom.tvTimer.textContent = timerText;
     dom.tvProgress.style.width = `${live.progressPercent.toFixed(1)}%`;
     document
@@ -410,9 +477,55 @@ function render() {
 
     document.body.classList.toggle("tv-warning", live.isWarning);
     document.body.classList.toggle("tv-timeup", live.timeUp);
+    document.body.classList.toggle("tv-premeeting", live.status === "pre_meeting");
 
     maybeShowWarningOverlay(live);
   }
+}
+
+function maybeAutoTransitionFromPreMeeting() {
+  if (autoTransitionInFlight) {
+    return;
+  }
+
+  if (state.status !== "pre_meeting" || state.isPaused) {
+    return;
+  }
+
+  if (!Number.isFinite(state.targetStartAt) || Date.now() < state.targetStartAt) {
+    return;
+  }
+
+  autoTransitionInFlight = true;
+
+  const now = Date.now();
+  const plannedDurationMs =
+    Number.isFinite(state.plannedDurationMs) && state.plannedDurationMs > 0
+      ? state.plannedDurationMs
+      : 60 * 60 * 1000;
+
+  const nextState = {
+    ...state,
+    status: "running",
+    isPaused: false,
+    pausedPhase: null,
+    pausedRemainingMs: null,
+    targetStartAt: null,
+    targetEndAt: Number.isFinite(state.targetEndAt)
+      ? Math.max(Number(state.targetEndAt), now)
+      : now + plannedDurationMs,
+    plannedDurationMs,
+    initialRunMs:
+      Number.isFinite(state.initialRunMs) && state.initialRunMs > 0
+        ? state.initialRunMs
+        : plannedDurationMs,
+    updatedAt: now,
+  };
+
+  writeState(nextState)
+    .finally(() => {
+      autoTransitionInFlight = false;
+    });
 }
 
 function maybeShowWarningOverlay(live) {
@@ -476,18 +589,28 @@ function computeLiveState(sourceState) {
   const schedule = buildScheduleWindow(startForCalc, endForCalc, now);
 
   let remainingMs = 0;
+  let remainingToStartMs = 0;
   let statusLabel = "En attente...";
   let timeUp = false;
 
   if (safe.status === "paused" || safe.isPaused) {
-    remainingMs = Math.max(
+    const pausedPhase = safe.pausedPhase === "pre_meeting" ? "pre_meeting" : "running";
+    remainingMs = Math.max(0, Number(safe.pausedRemainingMs ?? deriveRunningRemaining(safe, schedule, now)));
+    remainingToStartMs = pausedPhase === "pre_meeting" ? remainingMs : 0;
+    statusLabel = "EN PAUSE";
+  } else if (safe.status === "pre_meeting") {
+    remainingToStartMs = Math.max(
       0,
       Number(
-        safe.pausedRemainingMs ??
-          deriveRunningRemaining(safe, schedule, now),
+        Number.isFinite(safe.targetStartAt)
+          ? safe.targetStartAt - now
+          : schedule.hasValidSchedule
+            ? schedule.startMs - now
+            : 0,
       ),
     );
-    statusLabel = "EN PAUSE";
+    remainingMs = remainingToStartMs;
+    statusLabel = "La réunion commence dans :";
   } else if (safe.status === "running") {
     remainingMs = Math.max(0, deriveRunningRemaining(safe, schedule, now));
 
@@ -522,12 +645,15 @@ function computeLiveState(sourceState) {
   const progressPercent =
     safe.status === "idle"
       ? 0
+      : safe.status === "pre_meeting"
+        ? 0
       : clampPercent(((baselineMs - remainingMs) / baselineMs) * 100);
 
   return {
     ...safe,
     ...schedule,
     remainingMs,
+    remainingToStartMs,
     remainingMinutes,
     statusLabel,
     timeUp,
@@ -553,7 +679,7 @@ function deriveRunningRemaining(safe, schedule, now) {
 }
 
 function sanitizeState(raw) {
-  const status = ["idle", "running", "paused"].includes(raw?.status)
+  const status = ["idle", "pre_meeting", "running", "paused"].includes(raw?.status)
     ? raw.status
     : "idle";
 
@@ -568,14 +694,25 @@ function sanitizeState(raw) {
     warningThresholdMin: sanitizeWarningThreshold(raw?.warningThresholdMin, true),
     status,
     isPaused: Boolean(raw?.isPaused ?? status === "paused"),
+    pausedPhase: ["pre_meeting", "running"].includes(raw?.pausedPhase)
+      ? raw.pausedPhase
+      : null,
     pausedRemainingMs:
       raw?.pausedRemainingMs == null
         ? null
         : Math.max(0, Number(raw.pausedRemainingMs)),
+    targetStartAt:
+      raw?.targetStartAt == null || !Number.isFinite(Number(raw.targetStartAt))
+        ? null
+        : Number(raw.targetStartAt),
     targetEndAt:
       raw?.targetEndAt == null || !Number.isFinite(Number(raw.targetEndAt))
         ? null
         : Number(raw.targetEndAt),
+    plannedDurationMs:
+      raw?.plannedDurationMs == null || !Number.isFinite(Number(raw.plannedDurationMs))
+        ? null
+        : Math.max(0, Number(raw.plannedDurationMs)),
     initialRunMs:
       raw?.initialRunMs == null || !Number.isFinite(Number(raw.initialRunMs))
         ? null

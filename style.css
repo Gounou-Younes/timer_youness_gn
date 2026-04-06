@@ -141,6 +141,13 @@ input[type="text"] {
   font-size: clamp(36px, 9vw, 64px);
 }
 
+.admin-lead-message {
+  margin: 14px 0 4px;
+  color: #d9e8ff;
+  font-size: 20px;
+  font-weight: 700;
+}
+
 .status {
   margin: 6px 0;
 }
@@ -218,6 +225,15 @@ input[type="text"] {
   color: #ffd772;
 }
 
+.tv-premeeting .tv-timer {
+  color: #9fd8ff;
+  text-shadow: 0 0 22px rgba(134, 198, 255, 0.38);
+}
+
+.tv-premeeting .tv-status {
+  color: #c9e5ff;
+}
+
 .tv-timeup .tv-timer {
   color: var(--tv-danger);
   text-shadow: 0 0 24px rgba(255, 82, 82, 0.35);
@@ -241,6 +257,10 @@ input[type="text"] {
 
 .tv-warning .tv-progress {
   background: linear-gradient(90deg, #ffd35b, #ff9b3d);
+}
+
+.tv-premeeting .tv-progress {
+  background: linear-gradient(90deg, #9ab6cc, #8cc6ef);
 }
 
 .tv-timeup .tv-progress {
