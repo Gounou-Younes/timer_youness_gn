@@ -18,28 +18,74 @@
       <section id="adminView" class="view hidden" aria-live="polite">
         <div class="card">
           <h2>Admin Dashboard</h2>
-          <p class="muted">Use this mode on mobile phone or laptop: ?mode=admin</p>
+          <p class="muted">
+            Use this mode on mobile phone or laptop: ?mode=admin
+          </p>
 
-          <label for="durationInput">Duration (minutes)</label>
-          <input id="durationInput" type="number" min="1" max="600" value="30" />
+          <label for="meetingTitleInput">Meeting Title</label>
+          <input
+            id="meetingTitleInput"
+            type="text"
+            value="Monthly Review"
+            maxlength="100"
+          />
 
-          <div class="button-grid">
-            <button id="startBtn" class="btn btn-start" type="button">Start</button>
-            <button id="pauseBtn" class="btn btn-pause" type="button">Pause</button>
-            <button id="resetBtn" class="btn btn-reset" type="button">Reset</button>
+          <div class="schedule-grid">
+            <div>
+              <label for="startTimeInput">Start Time</label>
+              <input id="startTimeInput" type="time" value="09:00" />
+            </div>
+            <div>
+              <label for="endTimeInput">End Time</label>
+              <input id="endTimeInput" type="time" value="10:00" />
+            </div>
           </div>
 
-          <p id="adminLiveTime" class="admin-live">00:30</p>
+          <label for="warningThresholdInput"
+            >Warning Threshold (minutes before end)</label
+          >
+          <input
+            id="warningThresholdInput"
+            type="number"
+            min="1"
+            max="120"
+            value="5"
+          />
+
+          <div class="button-grid">
+            <button id="startBtn" class="btn btn-start" type="button">
+              Start
+            </button>
+            <button id="pauseBtn" class="btn btn-pause" type="button">
+              Pause
+            </button>
+            <button id="resetBtn" class="btn btn-reset" type="button">
+              Reset
+            </button>
+          </div>
+
+          <p id="adminLiveTime" class="admin-live">00:00</p>
           <p id="adminStatus" class="status">Loading state...</p>
-          <p class="muted small">Remote keys: ArrowUp/ArrowDown adjust duration, Enter toggles Start/Pause</p>
+          <p class="muted small">
+            Remote keys: ArrowUp/ArrowDown adjust warning threshold, Enter
+            toggles Start/Pause
+          </p>
         </div>
       </section>
 
       <section id="tvView" class="view hidden" aria-live="polite">
         <div class="tv-frame">
+          <p id="tvMeetingTitle" class="tv-title">Monthly Review</p>
+          <p id="tvScheduleMeta" class="tv-meta">Start 09:00 • End 10:00</p>
           <p id="tvStatus" class="tv-status">Waiting</p>
-          <p id="tvTimer" class="tv-timer">00:30</p>
-          <div class="tv-progress-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <p id="tvTimer" class="tv-timer">00:00</p>
+          <div
+            class="tv-progress-wrap"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
             <div id="tvProgress" class="tv-progress"></div>
           </div>
           <p id="tvHint" class="tv-hint">Open this URL on TV with ?mode=tv</p>

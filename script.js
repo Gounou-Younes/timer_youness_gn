@@ -23,10 +23,12 @@ const firebaseConfig = {
 };
 
 const defaultState = {
-  durationMs: 30 * 60 * 1000,
-  remainingMs: 30 * 60 * 1000,
+  meetingTitle: "Monthly Review",
+  startTime: "09:00",
+  endTime: "10:00",
+  warningThresholdMin: 5,
   status: "idle",
-  endAt: null,
+  pausedRemainingMs: null,
   updatedAt: 0,
 };
 
@@ -34,12 +36,17 @@ const dom = {
   modeLabel: document.getElementById("modeLabel"),
   adminView: document.getElementById("adminView"),
   tvView: document.getElementById("tvView"),
-  durationInput: document.getElementById("durationInput"),
+  meetingTitleInput: document.getElementById("meetingTitleInput"),
+  startTimeInput: document.getElementById("startTimeInput"),
+  endTimeInput: document.getElementById("endTimeInput"),
+  warningThresholdInput: document.getElementById("warningThresholdInput"),
   startBtn: document.getElementById("startBtn"),
   pauseBtn: document.getElementById("pauseBtn"),
   resetBtn: document.getElementById("resetBtn"),
   adminLiveTime: document.getElementById("adminLiveTime"),
   adminStatus: document.getElementById("adminStatus"),
+  tvMeetingTitle: document.getElementById("tvMeetingTitle"),
+  tvScheduleMeta: document.getElementById("tvScheduleMeta"),
   tvStatus: document.getElementById("tvStatus"),
   tvTimer: document.getElementById("tvTimer"),
   tvProgress: document.getElementById("tvProgress"),
@@ -47,9 +54,9 @@ const dom = {
 };
 
 let state = { ...defaultState };
-let database = null;
 let timerRef = null;
 let tvScale = 1;
+let isSavingForm = false;
 
 init();
 
@@ -64,12 +71,13 @@ async function init() {
 
   if (hasPlaceholders) {
     renderCredentialWarning();
+    bindAdminActions();
     startRenderLoop();
     return;
   }
 
   const app = initializeApp(firebaseConfig);
-  database = getDatabase(app);
+  const database = getDatabase(app);
   timerRef = ref(database, timerPath);
 
   subscribeToTimerState();
@@ -90,19 +98,22 @@ function setupMode() {
 }
 
 function subscribeToTimerState() {
-  onValue(timerRef, (snapshot) => {
+  if (!timerRef) {
+    return;
+  }
+
+  onValue(timerRef, async (snapshot) => {
     const remote = snapshot.val();
 
     if (!remote) {
-      set(timerRef, { ...defaultState, updatedAt: Date.now() });
+      await set(timerRef, { ...defaultState, updatedAt: Date.now() });
       return;
     }
 
     state = sanitizeState(remote);
 
     if (mode === "admin") {
-      const nextMinutes = Math.max(1, Math.round(state.durationMs / 60000));
-      dom.durationInput.value = String(nextMinutes);
+      syncInputsFromState(state);
     }
 
     render();
@@ -118,84 +129,94 @@ function bindAdminActions() {
   dom.pauseBtn.addEventListener("click", handlePause);
   dom.resetBtn.addEventListener("click", handleReset);
 
-  dom.durationInput.addEventListener("change", async () => {
-    if (!timerRef || state.status === "running") {
-      return;
-    }
+  dom.meetingTitleInput.addEventListener("input", handleSchedulerInputChange);
+  dom.startTimeInput.addEventListener("change", handleSchedulerInputChange);
+  dom.endTimeInput.addEventListener("change", handleSchedulerInputChange);
+  dom.warningThresholdInput.addEventListener(
+    "change",
+    handleSchedulerInputChange,
+  );
+}
 
-    const minutes = clampMinutes(Number(dom.durationInput.value));
-    const durationMs = minutes * 60000;
-    await writeState({
-      ...state,
-      status: state.status === "paused" ? "paused" : "idle",
-      durationMs,
-      remainingMs: state.status === "paused" ? state.remainingMs : durationMs,
-      updatedAt: Date.now(),
-    });
+async function handleSchedulerInputChange() {
+  if (isSavingForm) {
+    return;
+  }
+
+  const formState = readSchedulerInputs();
+  await writeState({
+    ...state,
+    ...formState,
+    updatedAt: Date.now(),
   });
 }
 
 async function handleStart() {
-  if (!timerRef) {
-    return;
-  }
-
-  const minutes = clampMinutes(Number(dom.durationInput.value));
-  const durationMs = minutes * 60000;
-
-  const remainingMs =
-    state.status === "paused" ? Math.max(1000, state.remainingMs) : durationMs;
+  const formState = readSchedulerInputs();
 
   await writeState({
-    durationMs,
-    remainingMs,
+    ...state,
+    ...formState,
     status: "running",
-    endAt: Date.now() + remainingMs,
+    pausedRemainingMs: null,
     updatedAt: Date.now(),
   });
 }
 
 async function handlePause() {
-  if (!timerRef || state.status !== "running") {
+  if (state.status !== "running") {
     return;
   }
 
-  const remaining = Math.max(0, Number(state.endAt || Date.now()) - Date.now());
+  const live = computeLiveState(state);
 
   await writeState({
     ...state,
-    remainingMs: remaining,
-    endAt: null,
+    ...readSchedulerInputs(),
     status: "paused",
+    pausedRemainingMs: live.remainingMs,
     updatedAt: Date.now(),
   });
 }
 
 async function handleReset() {
-  if (!timerRef) {
-    return;
-  }
-
-  const minutes = clampMinutes(Number(dom.durationInput.value));
-  const durationMs = minutes * 60000;
-
   await writeState({
-    durationMs,
-    remainingMs: durationMs,
+    ...state,
+    ...readSchedulerInputs(),
     status: "idle",
-    endAt: null,
+    pausedRemainingMs: null,
     updatedAt: Date.now(),
   });
 }
 
+function readSchedulerInputs() {
+  return {
+    meetingTitle: sanitizeMeetingTitle(dom.meetingTitleInput.value),
+    startTime: sanitizeTime(dom.startTimeInput.value, defaultState.startTime),
+    endTime: sanitizeTime(dom.endTimeInput.value, defaultState.endTime),
+    warningThresholdMin: clampWarningMinutes(Number(dom.warningThresholdInput.value)),
+  };
+}
+
+function syncInputsFromState(currentState) {
+  isSavingForm = true;
+  dom.meetingTitleInput.value = currentState.meetingTitle;
+  dom.startTimeInput.value = currentState.startTime;
+  dom.endTimeInput.value = currentState.endTime;
+  dom.warningThresholdInput.value = String(currentState.warningThresholdMin);
+  isSavingForm = false;
+}
+
 async function writeState(nextState) {
+  const safeState = sanitizeState(nextState);
+
   if (!timerRef) {
-    state = sanitizeState(nextState);
+    state = safeState;
     render();
     return;
   }
 
-  await set(timerRef, sanitizeState(nextState));
+  await set(timerRef, safeState);
 }
 
 function startRenderLoop() {
@@ -205,70 +226,134 @@ function startRenderLoop() {
 
 function render() {
   const live = computeLiveState(state);
-  const text = formatDuration(live.remainingMs);
-  const progress =
-    live.durationMs > 0
-      ? (100 * (live.durationMs - live.remainingMs)) / live.durationMs
-      : 0;
+  const remainingText = live.timeUp ? "TIME'S UP" : formatDuration(live.remainingMs);
 
   if (mode === "admin") {
-    dom.adminLiveTime.textContent = text;
-    dom.adminStatus.textContent = statusMessage(live.status);
+    dom.adminLiveTime.textContent = live.timeUp ? "00:00" : formatDuration(live.remainingMs);
+    dom.adminStatus.textContent = live.statusLabel;
   }
 
   if (mode === "tv") {
-    dom.tvTimer.textContent = text;
-    dom.tvStatus.textContent = statusMessage(live.status);
-    dom.tvProgress.style.width = `${Math.max(0, Math.min(100, progress)).toFixed(1)}%`;
-    document.body.classList.toggle(
-      "tv-alert",
-      live.remainingMs <= 5 * 60 * 1000 && live.status !== "idle",
-    );
+    dom.tvMeetingTitle.textContent = live.meetingTitle;
+    dom.tvScheduleMeta.textContent = `Start ${formatClockLabel(live.startTime)} - End ${formatClockLabel(live.endTime)}`;
+    dom.tvStatus.textContent = live.statusLabel;
+    dom.tvTimer.textContent = remainingText;
+    dom.tvProgress.style.width = `${live.progressPercent.toFixed(1)}%`;
+    document.querySelector(".tv-progress-wrap")?.setAttribute("aria-valuenow", String(Math.round(live.progressPercent)));
+
+    document.body.classList.toggle("tv-warning", live.isWarning);
+    document.body.classList.toggle("tv-timeup", live.timeUp);
   }
 }
 
 function computeLiveState(sourceState) {
   const safe = sanitizeState(sourceState);
+  const now = Date.now();
+  const schedule = buildScheduleWindow(safe.startTime, safe.endTime, now);
 
-  if (safe.status !== "running" || !safe.endAt) {
-    return safe;
+  let remainingMs;
+  let statusLabel;
+  let timeUp = false;
+
+  if (safe.status === "paused") {
+    remainingMs = Math.max(0, Number(safe.pausedRemainingMs ?? schedule.endMs - now));
+    statusLabel = "Paused";
+  } else if (safe.status === "running") {
+    remainingMs = Math.max(0, schedule.endMs - now);
+
+    if (remainingMs === 0) {
+      timeUp = true;
+      statusLabel = "Time's Up";
+    } else if (now < schedule.startMs) {
+      statusLabel = "Scheduled";
+    } else {
+      statusLabel = "In Progress";
+    }
+  } else {
+    remainingMs = Math.max(0, schedule.endMs - now);
+    statusLabel = now < schedule.startMs ? "Ready" : "Idle";
   }
 
-  const remainingMs = Math.max(0, safe.endAt - Date.now());
+  const warningMs = safe.warningThresholdMin * 60000;
+  const isWarning =
+    !timeUp &&
+    safe.status === "running" &&
+    remainingMs > 0 &&
+    remainingMs <= warningMs;
 
-  if (remainingMs <= 0) {
-    return {
-      ...safe,
-      remainingMs: 0,
-      status: "idle",
-      endAt: null,
-    };
-  }
+  const elapsed = Math.max(
+    0,
+    Math.min(schedule.durationMs, schedule.durationMs - Math.min(remainingMs, schedule.durationMs)),
+  );
+  const progressPercent = schedule.durationMs > 0 ? (elapsed / schedule.durationMs) * 100 : 0;
 
   return {
     ...safe,
+    ...schedule,
     remainingMs,
+    statusLabel,
+    isWarning,
+    timeUp,
+    progressPercent,
   };
 }
 
 function sanitizeState(raw) {
-  const durationMs = Math.max(
-    60000,
-    Number(raw?.durationMs ?? defaultState.durationMs),
-  );
-  const remainingMs = Math.max(0, Number(raw?.remainingMs ?? durationMs));
   const status = ["idle", "running", "paused"].includes(raw?.status)
     ? raw.status
     : "idle";
-  const endAt = raw?.endAt ? Number(raw.endAt) : null;
 
   return {
-    durationMs,
-    remainingMs,
+    meetingTitle: sanitizeMeetingTitle(raw?.meetingTitle),
+    startTime: sanitizeTime(raw?.startTime, defaultState.startTime),
+    endTime: sanitizeTime(raw?.endTime, defaultState.endTime),
+    warningThresholdMin: clampWarningMinutes(Number(raw?.warningThresholdMin ?? defaultState.warningThresholdMin)),
     status,
-    endAt,
+    pausedRemainingMs:
+      raw?.pausedRemainingMs == null
+        ? null
+        : Math.max(0, Number(raw.pausedRemainingMs)),
     updatedAt: Number(raw?.updatedAt ?? Date.now()),
   };
+}
+
+function sanitizeMeetingTitle(value) {
+  const title = String(value ?? "").trim();
+  return title || defaultState.meetingTitle;
+}
+
+function sanitizeTime(value, fallback) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) {
+    return fallback;
+  }
+  return `${match[1]}:${match[2]}`;
+}
+
+function buildScheduleWindow(startTime, endTime, baseMs) {
+  const baseDate = new Date(baseMs);
+  const startMs = timeToDateMs(baseDate, startTime);
+  let endMs = timeToDateMs(baseDate, endTime);
+
+  if (endMs <= startMs) {
+    endMs += 24 * 60 * 60 * 1000;
+  }
+
+  return {
+    startTime,
+    endTime,
+    startMs,
+    endMs,
+    durationMs: endMs - startMs,
+  };
+}
+
+function timeToDateMs(baseDate, hhmm) {
+  const [hh, mm] = hhmm.split(":").map((part) => Number(part));
+  const next = new Date(baseDate);
+  next.setHours(hh, mm, 0, 0);
+  return next.getTime();
 }
 
 function formatDuration(ms) {
@@ -284,21 +369,15 @@ function formatDuration(ms) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function statusMessage(status) {
-  if (status === "running") {
-    return "Running";
-  }
-  if (status === "paused") {
-    return "Paused";
-  }
-  return "Idle";
+function formatClockLabel(hhmm) {
+  return sanitizeTime(hhmm, "00:00");
 }
 
-function clampMinutes(value) {
+function clampWarningMinutes(value) {
   if (!Number.isFinite(value)) {
-    return 30;
+    return defaultState.warningThresholdMin;
   }
-  return Math.min(600, Math.max(1, Math.round(value)));
+  return Math.min(120, Math.max(1, Math.round(value)));
 }
 
 function setupRemoteControlSupport() {
@@ -306,13 +385,13 @@ function setupRemoteControlSupport() {
     if (mode === "admin") {
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        adjustDuration(1);
+        adjustWarningThreshold(1);
       } else if (event.key === "ArrowDown") {
         event.preventDefault();
-        adjustDuration(-1);
+        adjustWarningThreshold(-1);
       } else if (event.key === "Enter") {
         event.preventDefault();
-        if (computeLiveState(state).status === "running") {
+        if (state.status === "running") {
           handlePause();
         } else {
           handleStart();
@@ -336,11 +415,11 @@ function setupRemoteControlSupport() {
   });
 }
 
-function adjustDuration(delta) {
-  const current = clampMinutes(Number(dom.durationInput.value));
-  const next = clampMinutes(current + delta);
-  dom.durationInput.value = String(next);
-  dom.adminStatus.textContent = `Duration set to ${next} minute(s)`;
+function adjustWarningThreshold(delta) {
+  const current = clampWarningMinutes(Number(dom.warningThresholdInput.value));
+  const next = clampWarningMinutes(current + delta);
+  dom.warningThresholdInput.value = String(next);
+  handleSchedulerInputChange();
 }
 
 async function toggleFullscreen() {
