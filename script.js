@@ -64,6 +64,8 @@ async function init() {
   setupMode();
   registerServiceWorker();
   setupRemoteControlSupport();
+  bindAdminActions();
+  applyInitialUiState();
 
   const hasPlaceholders = Object.values(firebaseConfig).some((value) =>
     String(value).startsWith("PASTE_"),
@@ -71,17 +73,22 @@ async function init() {
 
   if (hasPlaceholders) {
     renderCredentialWarning();
-    bindAdminActions();
     startRenderLoop();
     return;
   }
 
-  const app = initializeApp(firebaseConfig);
-  const database = getDatabase(app);
-  timerRef = ref(database, timerPath);
-
-  subscribeToTimerState();
-  bindAdminActions();
+  try {
+    const app = initializeApp(firebaseConfig);
+    const database = resolveRealtimeDatabase(app);
+    timerRef = ref(database, timerPath);
+    subscribeToTimerState();
+  } catch (error) {
+    timerRef = null;
+    if (mode === "admin" && dom.adminStatus) {
+      dom.adminStatus.textContent =
+        "Realtime DB unavailable. Running local mode until connection is fixed.";
+    }
+  }
 
   if (mode === "tv") {
     await requestWakeLock();
@@ -89,6 +96,25 @@ async function init() {
   }
 
   startRenderLoop();
+}
+
+function applyInitialUiState() {
+  if (mode === "admin" && dom.adminStatus) {
+    dom.adminStatus.textContent = "Ready";
+  }
+}
+
+function resolveRealtimeDatabase(app) {
+  if (firebaseConfig.databaseURL) {
+    return getDatabase(app, firebaseConfig.databaseURL);
+  }
+
+  if (firebaseConfig.projectId) {
+    const inferredUrl = `https://${firebaseConfig.projectId}-default-rtdb.firebaseio.com`;
+    return getDatabase(app, inferredUrl);
+  }
+
+  return getDatabase(app);
 }
 
 function setupMode() {
@@ -122,6 +148,10 @@ function subscribeToTimerState() {
 
 function bindAdminActions() {
   if (mode !== "admin") {
+    return;
+  }
+
+  if (!dom.startBtn || !dom.pauseBtn || !dom.resetBtn) {
     return;
   }
 
@@ -191,19 +221,36 @@ async function handleReset() {
 
 function readSchedulerInputs() {
   return {
-    meetingTitle: sanitizeMeetingTitle(dom.meetingTitleInput.value),
-    startTime: sanitizeTime(dom.startTimeInput.value, defaultState.startTime),
-    endTime: sanitizeTime(dom.endTimeInput.value, defaultState.endTime),
-    warningThresholdMin: clampWarningMinutes(Number(dom.warningThresholdInput.value)),
+    meetingTitle: sanitizeMeetingTitle(readInputValue(dom.meetingTitleInput, defaultState.meetingTitle)),
+    startTime: sanitizeTime(readInputValue(dom.startTimeInput, defaultState.startTime), defaultState.startTime),
+    endTime: sanitizeTime(readInputValue(dom.endTimeInput, defaultState.endTime), defaultState.endTime),
+    warningThresholdMin: clampWarningMinutes(Number(readInputValue(dom.warningThresholdInput, String(defaultState.warningThresholdMin)))),
   };
+}
+
+function readInputValue(input, fallback) {
+  if (!input || typeof input.value !== "string") {
+    return fallback;
+  }
+
+  const value = input.value.trim();
+  return value || fallback;
 }
 
 function syncInputsFromState(currentState) {
   isSavingForm = true;
-  dom.meetingTitleInput.value = currentState.meetingTitle;
-  dom.startTimeInput.value = currentState.startTime;
-  dom.endTimeInput.value = currentState.endTime;
-  dom.warningThresholdInput.value = String(currentState.warningThresholdMin);
+  if (dom.meetingTitleInput) {
+    dom.meetingTitleInput.value = currentState.meetingTitle;
+  }
+  if (dom.startTimeInput) {
+    dom.startTimeInput.value = currentState.startTime;
+  }
+  if (dom.endTimeInput) {
+    dom.endTimeInput.value = currentState.endTime;
+  }
+  if (dom.warningThresholdInput) {
+    dom.warningThresholdInput.value = String(currentState.warningThresholdMin);
+  }
   isSavingForm = false;
 }
 
@@ -216,7 +263,12 @@ async function writeState(nextState) {
     return;
   }
 
-  await set(timerRef, safeState);
+  try {
+    await set(timerRef, safeState);
+  } catch {
+    state = safeState;
+    render();
+  }
 }
 
 function startRenderLoop() {
@@ -228,12 +280,19 @@ function render() {
   const live = computeLiveState(state);
   const remainingText = live.timeUp ? "TIME'S UP" : formatDuration(live.remainingMs);
 
-  if (mode === "admin") {
+  if (mode === "admin" && dom.adminLiveTime && dom.adminStatus) {
     dom.adminLiveTime.textContent = live.timeUp ? "00:00" : formatDuration(live.remainingMs);
     dom.adminStatus.textContent = live.statusLabel;
   }
 
-  if (mode === "tv") {
+  if (
+    mode === "tv" &&
+    dom.tvMeetingTitle &&
+    dom.tvScheduleMeta &&
+    dom.tvStatus &&
+    dom.tvTimer &&
+    dom.tvProgress
+  ) {
     dom.tvMeetingTitle.textContent = live.meetingTitle;
     dom.tvScheduleMeta.textContent = `Start ${formatClockLabel(live.startTime)} - End ${formatClockLabel(live.endTime)}`;
     dom.tvStatus.textContent = live.statusLabel;
@@ -332,28 +391,34 @@ function sanitizeTime(value, fallback) {
 }
 
 function buildScheduleWindow(startTime, endTime, baseMs) {
-  const baseDate = new Date(baseMs);
-  const startMs = timeToDateMs(baseDate, startTime);
-  let endMs = timeToDateMs(baseDate, endTime);
+  const startDate = parseTimeToTodayDate(startTime, baseMs);
+  const endDate = parseTimeToTodayDate(endTime, baseMs);
 
-  if (endMs <= startMs) {
-    endMs += 24 * 60 * 60 * 1000;
+  if (endDate.getTime() <= startDate.getTime()) {
+    endDate.setDate(endDate.getDate() + 1);
   }
+
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
 
   return {
     startTime,
     endTime,
+    startDate,
+    endDate,
     startMs,
     endMs,
     durationMs: endMs - startMs,
   };
 }
 
-function timeToDateMs(baseDate, hhmm) {
-  const [hh, mm] = hhmm.split(":").map((part) => Number(part));
+function parseTimeToTodayDate(hhmm, baseMs) {
+  const safeTime = sanitizeTime(hhmm, defaultState.startTime);
+  const [hh, mm] = safeTime.split(":").map((part) => Number(part));
+  const baseDate = new Date(baseMs);
   const next = new Date(baseDate);
   next.setHours(hh, mm, 0, 0);
-  return next.getTime();
+  return next;
 }
 
 function formatDuration(ms) {
@@ -416,9 +481,13 @@ function setupRemoteControlSupport() {
 }
 
 function adjustWarningThreshold(delta) {
-  const current = clampWarningMinutes(Number(dom.warningThresholdInput.value));
+  const current = clampWarningMinutes(
+    Number(readInputValue(dom.warningThresholdInput, String(defaultState.warningThresholdMin))),
+  );
   const next = clampWarningMinutes(current + delta);
-  dom.warningThresholdInput.value = String(next);
+  if (dom.warningThresholdInput) {
+    dom.warningThresholdInput.value = String(next);
+  }
   handleSchedulerInputChange();
 }
 
